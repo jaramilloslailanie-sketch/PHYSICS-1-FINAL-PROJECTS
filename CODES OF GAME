@@ -1,0 +1,2166 @@
+"""
+GRAVITY BOUNCE  v3  //  NEON ORBIT
+----------------------------------
+Keep the ball bouncing across eight worlds while the arena fights back.
+Earn coins, buy skins and permanent upgrades, and complete missions.
+
+NEW IN v3
+* Difficulty: MEDIUM / HARD / EXTREME (smaller platform, faster ball,
+  limited paddle speed, more hazards, bigger coin + score multipliers).
+* Hazards: solar WIND gusts and falling EMP bombs. A red column warns
+  you where an EMP will land - if it hits the platform you are stunned.
+* Power-ups (float in the ball's flight path): S shield, W wide, M magnet.
+* WARP energy: perfect bounces charge it; press SPACE when full for
+  slow motion.
+* 8 worlds, neon cyber-grid scenery, holographic platform glow.
+* Shop: ball skins, platform skins and permanent UPGRADES.
+* Missions with coin rewards, per-difficulty best scores.
+
+Controls: mouse or <- -> / A D = move | SPACE = warp / skip countdown
+          P / Esc = pause | G = aim guide | R = restart
+Progress is saved in your home folder (compatible with v2 saves).
+"""
+import colorsys
+import json
+import math
+import os
+import random
+import time
+import tkinter as tk
+
+# ---------- Theme ----------
+FONT = "Consolas"
+BG = "#050816"
+CARD = "#0c1430"
+TEXT = "#e2e8f0"
+MUTED = "#7c8db5"
+ACCENT = "#22d3ee"
+GREEN = "#34d399"
+ORANGE = "#fb923c"
+RED = "#f43f5e"
+VIOLET = "#a78bfa"
+GOLD = "#fde047"
+SLATE = "#334155"
+PINK = "#f0abfc"
+
+PLANETS = {
+    "Earth": 9.81, "Moon": 1.62, "Mars": 3.71, "Venus": 8.87,
+    "Jupiter": 24.79, "Titan": 1.35, "Neptune": 11.15, "Pluto": 0.62,
+}
+ORDER = list(PLANETS)
+
+# sky = (top, bottom); edge = neon colour of the ground line / grid
+THEMES = {
+    "Earth": dict(sky=("#030a1f", "#2563eb"), edge="#22d3ee", stars=50,
+                  star_ymax=130, cloud="#cbd5e1", stripes=False, city=True),
+    "Moon": dict(sky=("#000000", "#1e293b"), edge="#e2e8f0", stars=130,
+                 star_ymax=340, cloud=None, stripes=False, city=False),
+    "Mars": dict(sky=("#2b0707", "#c2410c"), edge="#fb923c", stars=30,
+                 star_ymax=90, cloud=None, stripes=False, city=True),
+    "Venus": dict(sky=("#451a03", "#f59e0b"), edge="#facc15", stars=0,
+                  star_ymax=1, cloud="#fde68a", stripes=False, city=True),
+    "Jupiter": dict(sky=("#2a0f02", "#fdba74"), edge="#f472b6", stars=0,
+                    star_ymax=1, cloud="#fed7aa", stripes=True, city=False),
+    "Titan": dict(sky=("#1c1305", "#b45309"), edge="#fbbf24", stars=20,
+                  star_ymax=80, cloud="#fcd34d", stripes=False, city=False),
+    "Neptune": dict(sky=("#020617", "#1d4ed8"), edge="#60a5fa", stars=40,
+                    star_ymax=200, cloud=None, stripes=True, city=False),
+    "Pluto": dict(sky=("#020617", "#312e81"), edge="#a5b4fc", stars=110,
+                  star_ymax=330, cloud=None, stripes=False, city=False),
+}
+
+HEIGHTS = [1, 1.5, 2, 3, 4, 5, 8, 10, 15, 20, 30, 40, 50]
+
+DIFFS = {
+    "MEDIUM": dict(color=GREEN, lives=3, tw=160, shrink=7, tw_min=62,
+                   kb=640, mouse=1900, wind=0.8, emp_start=4, emp_int=7.5,
+                   stun=0.8, coin=1.0, score=1.0, drone=100, life_every=15,
+                   vx=165),
+    "HARD": dict(color=ORANGE, lives=3, tw=140, shrink=8, tw_min=54,
+                 kb=580, mouse=1500, wind=1.1, emp_start=3, emp_int=5.8,
+                 stun=1.0, coin=1.5, score=1.5, drone=130, life_every=20,
+                 vx=190),
+    "EXTREME": dict(color=RED, lives=2, tw=122, shrink=9, tw_min=46,
+                    kb=520, mouse=1150, wind=1.5, emp_start=2, emp_int=4.4,
+                    stun=1.3, coin=2.0, score=2.5, drone=160, life_every=25,
+                    vx=215),
+}
+DIFF_ORDER = list(DIFFS)
+
+PICKUPS = {  # kind: (ring colour, fill colour, label)
+    "coin": ("#fde68a", "#f59e0b", ""),
+    "shield": (ACCENT, "#164e63", "S"),
+    "wide": (PINK, "#701a75", "W"),
+    "magnet": (ORANGE, "#7c2d12", "M"),
+}
+
+# ---------- Skins ----------
+BALL_SKINS = [
+    dict(id="classic", name="Classic", price=0, slow="#fde047",
+         fast="#ef4444", outline="#ffffff", trail="#fef9c3", decor=[]),
+    dict(id="ocean", name="Ocean", price=100, slow="#67e8f9",
+         fast="#1d4ed8", outline="#e0f2fe", trail="#bae6fd", decor=[]),
+    dict(id="slime", name="Slime", price=150, slow="#bef264",
+         fast="#15803d", outline="#ecfccb", trail="#d9f99d",
+         decor=[(-0.35, -0.2, 0.18, "#ecfccb"), (0.3, 0.25, 0.12, "#ecfccb")]),
+    dict(id="ember", name="Ember", price=250, slow="#ea580c",
+         fast="#fef08a", outline="#fff7ed", trail="#fdba74", decor=[]),
+    dict(id="eight", name="Eight Ball", price=300, slow="#111827",
+         fast="#374151", outline="#e5e7eb", trail="#9ca3af",
+         decor=[(0, 0, 0.45, "#ffffff"), (0, 0, 0.18, "#111827")]),
+    dict(id="galaxy", name="Galaxy", price=450, slow="#4c1d95",
+         fast="#db2777", outline="#e9d5ff", trail="#c4b5fd",
+         decor=[(-0.4, -0.3, 0.12, "#ffffff"), (0.35, -0.1, 0.09, "#fde68a"),
+                (0.1, 0.4, 0.1, "#ffffff")]),
+    dict(id="plasma", name="Plasma", price=550, slow="#22d3ee",
+         fast="#e879f9", outline="#ecfeff", trail="#a5f3fc",
+         decor=[(0, 0, 0.3, "#ffffff")]),
+    dict(id="gold", name="Golden", price=700, slow="#fbbf24",
+         fast="#f59e0b", outline="#fef3c7", trail="#fde047",
+         decor=[(-0.3, -0.35, 0.14, "#fffbeb")]),
+    dict(id="void", name="Void", price=850, slow="#020617",
+         fast="#6d28d9", outline="#a78bfa", trail="#7c3aed",
+         decor=[(0, 0, 0.35, "#4c1d95")]),
+    dict(id="rainbow", name="Rainbow", price=1000, special="rainbow",
+         slow="#ffffff", fast="#ffffff", outline="#ffffff", trail="#ffffff",
+         decor=[]),
+]
+
+PLAT_SKINS = [
+    dict(id="steel", name="Steel", price=0, fill="#334155",
+         outline="#e2e8f0", center=GOLD),
+    dict(id="neon", name="Neon", price=100, fill="#0f172a",
+         outline="#22d3ee", center="#f472b6"),
+    dict(id="wood", name="Wood", price=150, fill="#92400e",
+         outline="#fde68a", center="#fbbf24"),
+    dict(id="ice", name="Ice", price=200, fill="#bae6fd",
+         outline="#ffffff", center="#38bdf8"),
+    dict(id="lava", name="Lava", price=300, fill="#7f1d1d",
+         outline="#fb923c", center="#facc15"),
+    dict(id="carbon", name="Carbon", price=400, fill="#171717",
+         outline="#ef4444", center="#ef4444"),
+    dict(id="holo", name="Hologram", price=500, fill="#0e7490",
+         outline="#67e8f9", center="#ecfeff"),
+    dict(id="royal", name="Royal", price=600, fill="#6d28d9",
+         outline="#fde68a", center="#ffffff"),
+    dict(id="voidp", name="Void", price=750, fill="#020617",
+         outline="#a78bfa", center="#c084fc"),
+    dict(id="rainbow", name="Rainbow", price=900, special="rainbow",
+         fill="#1e293b", outline="#ffffff", center="#ffffff"),
+]
+
+SKINS = {"ball": BALL_SKINS, "plat": PLAT_SKINS}
+SKIN_BY_ID = {k: {s["id"]: s for s in v} for k, v in SKINS.items()}
+
+# ---------- Upgrades & missions ----------
+UPGRADES = [
+    dict(id="life", name="EXTRA LIFE", desc="Start every run with +1 life",
+         max=2, base=500),
+    dict(id="dur", name="CHRONO CORE",
+         desc="Power-ups and warp last 20% longer", max=3, base=300),
+    dict(id="coin", name="COIN BOOST", desc="+10% coins from everything",
+         max=5, base=250),
+    dict(id="energy", name="WARP CELL", desc="Warp energy charges 20% faster",
+         max=3, base=300),
+    dict(id="plat", name="WIDE FRAME", desc="Platform is 7% wider",
+         max=3, base=350),
+]
+UPG_IDS = [u["id"] for u in UPGRADES]
+
+STAT_KEYS = ["best_rally", "max_level", "bullseyes", "pickups", "bounces",
+             "emps"]
+ACHIEVEMENTS = [
+    dict(id="r15", name="Warming Up", desc="Reach a 15 rally",
+         stat="best_rally", target=15, reward=50),
+    dict(id="r30", name="Flow State", desc="Reach a 30 rally",
+         stat="best_rally", target=30, reward=150),
+    dict(id="r50", name="Untouchable", desc="Reach a 50 rally",
+         stat="best_rally", target=50, reward=400),
+    dict(id="w4", name="Space Cadet", desc="Reach world 4",
+         stat="max_level", target=4, reward=75),
+    dict(id="w8", name="Deep Space", desc="Reach world 8",
+         stat="max_level", target=8, reward=250),
+    dict(id="w12", name="Edge of Reality", desc="Reach world 12",
+         stat="max_level", target=12, reward=500),
+    dict(id="b25", name="Sharpshooter", desc="25 bullseye bounces (total)",
+         stat="bullseyes", target=25, reward=100),
+    dict(id="b150", name="Dead Eye", desc="150 bullseye bounces (total)",
+         stat="bullseyes", target=150, reward=300),
+    dict(id="p15", name="Collector", desc="Grab 15 floating items (total)",
+         stat="pickups", target=15, reward=100),
+    dict(id="p60", name="Hoarder", desc="Grab 60 floating items (total)",
+         stat="pickups", target=60, reward=250),
+    dict(id="m500", name="Marathon", desc="500 bounces (total)",
+         stat="bounces", target=500, reward=200),
+    dict(id="e20", name="Evasive", desc="Dodge 20 EMP bombs (total)",
+         stat="emps", target=20, reward=150),
+]
+ACH_IDS = [a["id"] for a in ACHIEVEMENTS]
+
+# ---------- Save file ----------
+SAVE_FILE = os.path.join(os.path.expanduser("~"), ".gravity_bounce_save.json")
+OLD_BEST_FILE = os.path.join(os.path.expanduser("~"), ".gravity_bounce_best")
+
+MENU_SUB = ("Keep the ball bouncing. Survive wind and EMP strikes.\n"
+            "Collect power-ups, charge WARP, unlock upgrades.")
+
+
+def default_save():
+    return {"bests": {d: 0 for d in DIFFS}, "best": 0, "coins": 0,
+            "diff": "MEDIUM",
+            "owned": {"ball": ["classic"], "plat": ["steel"]},
+            "equipped": {"ball": "classic", "plat": "steel"},
+            "stats": {k: 0 for k in STAT_KEYS},
+            "ach": [], "upg": {u: 0 for u in UPG_IDS}}
+
+
+def load_save():
+    data = default_save()
+    try:
+        with open(SAVE_FILE) as f:
+            raw = json.load(f)
+    except (OSError, ValueError):
+        try:                                   # import v1 best score
+            with open(OLD_BEST_FILE) as f:
+                data["bests"]["MEDIUM"] = int(f.read().strip())
+        except (OSError, ValueError):
+            pass
+        return data
+    try:
+        data["coins"] = max(0, int(raw.get("coins", 0)))
+        bests = raw.get("bests")
+        if isinstance(bests, dict):
+            for d in DIFFS:
+                data["bests"][d] = max(0, int(bests.get(d, 0)))
+        else:                                  # v2 save: one best score
+            data["bests"]["MEDIUM"] = max(0, int(raw.get("best", 0)))
+        if raw.get("diff") in DIFFS:
+            data["diff"] = raw["diff"]
+        stats = raw.get("stats", {})
+        for k in STAT_KEYS:
+            data["stats"][k] = max(0, int(stats.get(k, 0)))
+        data["ach"] = [a for a in raw.get("ach", []) if a in ACH_IDS]
+        for u in UPGRADES:
+            lvl = int(raw.get("upg", {}).get(u["id"], 0))
+            data["upg"][u["id"]] = max(0, min(u["max"], lvl))
+        for kind in ("ball", "plat"):
+            valid = SKIN_BY_ID[kind]
+            owned = [s for s in raw.get("owned", {}).get(kind, [])
+                     if s in valid]
+            for s in data["owned"][kind]:
+                if s not in owned:
+                    owned.append(s)
+            data["owned"][kind] = owned
+            eq = raw.get("equipped", {}).get(kind)
+            if eq in owned:
+                data["equipped"][kind] = eq
+    except (TypeError, ValueError, AttributeError):
+        return default_save()
+    return data
+
+
+def write_save(data):
+    try:
+        with open(SAVE_FILE, "w") as f:
+            json.dump(data, f)
+    except OSError:
+        pass
+
+
+# ---------- Helpers ----------
+def lerp(a, b, t):
+    return a + (b - a) * t
+
+
+def hex_to_rgb(h):
+    h = h.lstrip("#")
+    return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def mix(c1, c2, t):
+    t = max(0.0, min(1.0, t))
+    r1, g1, b1 = hex_to_rgb(c1)
+    r2, g2, b2 = hex_to_rgb(c2)
+    return "#%02x%02x%02x" % (
+        int(lerp(r1, r2, t)), int(lerp(g1, g2, t)), int(lerp(b1, b2, t)))
+
+
+def reflect(x, lo, hi):
+    w = hi - lo
+    d = (x - lo) % (2 * w)
+    if d > w:
+        d = 2 * w - d
+    return lo + d
+
+
+class HoverButton(tk.Button):
+    def __init__(self, master, color, **kw):
+        super().__init__(
+            master, bg=color, fg="white", activebackground=color,
+            activeforeground="white", relief="flat", bd=0,
+            font=(FONT, 11, "bold"), cursor="hand2",
+            padx=10, pady=8, takefocus=0, **kw)
+        self.base = color
+        self.hover = mix(color, "#ffffff", 0.18)
+        self.bind("<Enter>", lambda e: self.config(bg=self.hover))
+        self.bind("<Leave>", lambda e: self.config(bg=self.base))
+
+
+class Mover:
+    """Bounces back and forth between lo and hi at constant speed (px/s)."""
+
+    def __init__(self, lo, hi, speed):
+        self.lo, self.hi, self.speed = lo, hi, speed
+        self.x = random.uniform(lo, hi)
+        self.dir = random.choice((-1, 1))
+
+    @property
+    def vx(self):
+        return self.dir * self.speed
+
+    def update(self, dt):
+        self.x += self.dir * self.speed * dt
+        if self.x > self.hi:
+            self.x = 2 * self.hi - self.x
+            self.dir = -1
+        elif self.x < self.lo:
+            self.x = 2 * self.lo - self.x
+            self.dir = 1
+
+
+class GravityBounce:
+    CW, CH = 700, 430
+    GROUND_Y = 372
+    PLAT_H = 10
+    BALL_R = 14
+    DROP_Y = 66
+    Y_LAND = GROUND_Y - PLAT_H - BALL_R
+    FALL_PX = Y_LAND - DROP_Y
+    DRONE_Y = DROP_Y - BALL_R - 18
+    FRAME_MS = 16
+    GUIDE_N = 22
+    MAX_LIVES = 5
+    PART_SCALE = 14.0
+    BOUNCES_PER_LEVEL = 6
+    SQUASH_TIME = 0.14
+    COUNTDOWN = 2.4
+    COIN_R = 11
+    WARP_SCALE = 0.55
+    EMP_SPEED = 430.0
+    SCREENS = ("menu", "over", "pause", "shop", "ach")
+
+    def __init__(self, root):
+        self.root = root
+        root.title("Gravity Bounce v3 - Neon Orbit")
+        root.geometry("760x760")
+        root.configure(bg=BG)
+        root.resizable(False, False)
+        root.protocol("WM_DELETE_WINDOW", self.on_close)
+
+        data = load_save()
+        self.bests = data["bests"]
+        self.diff = data["diff"]
+        self.coins = data["coins"]
+        self.owned = data["owned"]
+        self.equipped = data["equipped"]
+        self.stats = data["stats"]
+        self.ach = data["ach"]
+        self.upg = data["upg"]
+        self.ball_skin = SKIN_BY_ID["ball"][self.equipped["ball"]]
+        self.plat_skin = SKIN_BY_ID["plat"][self.equipped["plat"]]
+
+        self.best_start = self.best
+        self.score = 0
+        self.run_coins = 0
+        self.lives = 3
+        self.level = 1
+        self.rally = 0
+        self.best_rally = 0
+        self.total_bounces = 0
+        self.guide = True
+
+        # menu | shop | ach | ready | play | result | paused | over
+        self.state = "menu"
+        self.prev_state = "menu"
+        self.shop_from = "menu"
+        self.shop_tab = "ball"
+        self.shop_message = ("Click an item to buy or equip it", MUTED)
+        self.clock = 0.0
+        self.planet = "Earth"
+        self.g = PLANETS["Earth"]
+        self.height = 15.0
+        self.fall_time = 1.75
+        self.scale = 1.0
+        self.gpx = 100.0
+        self.v_launch = 400.0
+        self.tw_base = 150.0
+        self.tw = 150.0
+        self.vx_max = 200.0
+        self.bg_planet = None
+
+        self.px = self.CW / 2
+        self.pvx = 0.0
+        self.keys = set()
+        self.mouse_x = None
+        self.mouse_active = False
+
+        self.bx = 0.0
+        self.by = float(self.DROP_Y)
+        self.vx = 0.0
+        self.vy = 0.0
+        self.squash = 0.0
+        self.result_timer = 0.0
+        self.banner_timer = 0.0
+        self.ready_timer = 0.0
+        self.count_timer = 0.0
+        self.last_count = None
+        self.frame_count = 0
+
+        # v3 systems
+        self.energy = 0.0
+        self.shield = False
+        self.wide_t = 0.0
+        self.magnet_t = 0.0
+        self.slow_t = 0.0
+        self.stun_t = 0.0
+        self.wind = 0.0
+        self.wind_target = 0.0
+        self.wind_timer = 1.0
+        self.emp_timer = 4.0
+        self.emps = []
+        self.flash_t = 0.0
+        self.flash_color = "#ffffff"
+        self.toasts = []
+        self.toast_t = 0.0
+        self.info_clock = 0
+        self.fx_cache = None
+        self.streaks_on = False
+
+        self.trail = []
+        self.particles = []
+        self.popups = []
+        self.ring = None
+        self.coin = None
+        self.guide_shown = False
+        self.after_id = None
+        self.btn_text = {}
+
+        self.drone = Mover(75, self.CW - 40, 110)
+
+        self.build_gui()
+        self.setup_items()
+        self.apply_skins()
+        self.bind_keys()
+        self.go_menu()
+        self.tw = self.target_tw()
+
+        self.last = time.perf_counter()
+        self.tick()
+
+    # ---- derived values --------------------------------------------------
+    @property
+    def best(self):
+        return self.bests[self.diff]
+
+    @best.setter
+    def best(self, v):
+        self.bests[self.diff] = v
+
+    @property
+    def cfg(self):
+        return DIFFS[self.diff]
+
+    def dur_mult(self):
+        return 1 + 0.2 * self.upg["dur"]
+
+    def target_tw(self):
+        t = self.tw_base * (1 + 0.07 * self.upg["plat"])
+        return t * (1.45 if self.wide_t > 0 else 1.0)
+
+    # ------------------------------------------------------------------
+    # GUI
+    # ------------------------------------------------------------------
+    def build_gui(self):
+        tk.Label(self.root, text="GRAVITY BOUNCE  //  NEON ORBIT",
+                 font=(FONT, 22, "bold"), bg=BG, fg=ACCENT
+                 ).pack(pady=(12, 0))
+        tk.Label(self.root,
+                 text="Survive the wind. Dodge the EMPs. Don't touch the floor.",
+                 font=(FONT, 10), bg=BG, fg=MUTED).pack(pady=(0, 8))
+
+        stats = tk.Frame(self.root, bg=BG)
+        stats.pack(padx=14, fill="x")
+        for i in range(6):
+            stats.columnconfigure(i, weight=1, uniform="s")
+        self.stat_vars = {}
+        self.unit_vars = {}
+
+        def stat(col, title, unit, color):
+            card = tk.Frame(stats, bg=CARD, highlightthickness=1,
+                            highlightbackground=mix(color, CARD, 0.65))
+            card.grid(row=0, column=col, padx=3, sticky="nsew")
+            tk.Label(card, text=title, font=(FONT, 8, "bold"),
+                     bg=CARD, fg=MUTED).pack(pady=(8, 0))
+            var = tk.StringVar(value="0")
+            tk.Label(card, textvariable=var, font=(FONT, 15, "bold"),
+                     bg=CARD, fg=color).pack()
+            uvar = tk.StringVar(value=unit)
+            tk.Label(card, textvariable=uvar, font=(FONT, 8),
+                     bg=CARD, fg=MUTED).pack(pady=(0, 8))
+            self.stat_vars[title] = var
+            self.unit_vars[title] = uvar
+
+        stat(0, "SCORE", "points", ACCENT)
+        stat(1, "BEST", "points", ORANGE)
+        stat(2, "COINS", "total", GOLD)
+        stat(3, "WORLD", "planet", GREEN)
+        stat(4, "LIVES", "remaining", RED)
+        stat(5, "COMBO", "next x1.00", PINK)
+
+        self.canvas = tk.Canvas(self.root, width=self.CW, height=self.CH,
+                                highlightthickness=1, bg=BG,
+                                highlightbackground=mix(ACCENT, BG, 0.6))
+        self.canvas.pack(pady=10)
+
+        btns = tk.Frame(self.root, bg=BG)
+        btns.pack(pady=(2, 8))
+        self.menu_btn = HoverButton(btns, SLATE, text="☰ MENU", width=11,
+                                    command=self.go_menu)
+        self.menu_btn.grid(row=0, column=0, padx=5)
+        self.pause_btn = HoverButton(btns, "#c2410c", text="⏸ PAUSE",
+                                     width=11, command=self.toggle_pause)
+        self.pause_btn.grid(row=0, column=1, padx=5)
+        self.guide_btn = HoverButton(btns, "#6d28d9", text="GUIDE: ON",
+                                     width=11, command=self.toggle_guide)
+        self.guide_btn.grid(row=0, column=2, padx=5)
+
+        self.status = tk.Label(self.root, text="Welcome, pilot. Press PLAY",
+                               font=(FONT, 12, "bold"), bg=BG, fg=GREEN)
+        self.status.pack()
+        tk.Label(self.root,
+                 text="Mouse / ← → = move  ·  SPACE = warp  ·  P / Esc = pause"
+                      "  ·  G = guide  ·  R = restart  ·  guide OFF = 2x points",
+                 font=(FONT, 9), bg=BG, fg=MUTED).pack(pady=2)
+
+    def bind_keys(self):
+        r = self.root
+        r.bind("<space>", lambda e: self.action())
+        r.bind("<Return>", lambda e: self.action())
+        r.bind("<Escape>", lambda e: self.on_escape())
+        for k in ("p", "P"):
+            r.bind(k, lambda e: self.toggle_pause())
+        for k in ("g", "G"):
+            r.bind(k, lambda e: self.toggle_guide())
+        for k in ("r", "R"):
+            r.bind(k, lambda e: self.new_game())
+        for key, d in (("Left", "L"), ("a", "L"), ("A", "L"),
+                       ("Right", "R"), ("d", "R"), ("D", "R")):
+            r.bind(f"<KeyPress-{key}>", lambda e, d=d: self.keys.add(d))
+            r.bind(f"<KeyRelease-{key}>",
+                   lambda e, d=d: self.keys.discard(d))
+        r.bind("<FocusOut>", lambda e: self.keys.clear())
+        self.canvas.bind("<Motion>", self.on_mouse)
+
+    def on_mouse(self, event):
+        self.mouse_x = event.x
+        self.mouse_active = True
+
+    def on_escape(self):
+        if self.state in ("shop", "ach"):
+            self.close_sub()
+        else:
+            self.toggle_pause()
+
+    # ---- canvas text / buttons ------------------------------------------
+    def shadow_text(self, tag, y, size):
+        c = self.canvas
+        font = (FONT, size, "bold")
+        wrap = self.CW - 60
+        c.create_text(self.CW / 2 + 2, y + 2, text="", font=font,
+                      fill="#000000", tags=(tag + "_sh",),
+                      justify="center", width=wrap)
+        c.create_text(self.CW / 2, y, text="", font=font, fill="white",
+                      tags=(tag,), justify="center", width=wrap)
+
+    def put_text(self, tag, text, color=None):
+        c = self.canvas
+        c.itemconfig(tag + "_sh", text=text)
+        if color:
+            c.itemconfig(tag, text=text, fill=color)
+        else:
+            c.itemconfig(tag, text=text)
+
+    def make_button(self, group, key, x, y, w, h, text, color, cmd,
+                    size=14, state="hidden", extra=()):
+        c = self.canvas
+        tags = (group, key, "btn") + tuple(extra)
+        rect = c.create_rectangle(x - w / 2, y - h / 2, x + w / 2, y + h / 2,
+                                  fill=color,
+                                  outline=mix(color, "#ffffff", .4),
+                                  width=2, tags=tags, state=state)
+        self.btn_text[key] = c.create_text(
+            x, y, text=text, fill="white", font=(FONT, size, "bold"),
+            tags=tags, state=state)
+        hover = mix(color, "#ffffff", .18)
+        c.tag_bind(key, "<Button-1>", lambda e: cmd())
+        c.tag_bind(key, "<Enter>",
+                   lambda e: (c.itemconfig(rect, fill=hover),
+                              c.config(cursor="hand2")))
+        c.tag_bind(key, "<Leave>",
+                   lambda e: (c.itemconfig(rect, fill=color),
+                              c.config(cursor="")))
+        return rect
+
+    def setup_items(self):
+        c = self.canvas
+        self.shadow = c.create_oval(0, 0, 0, 0, fill="#000000", outline="",
+                                    stipple="gray50", state="hidden")
+        self.barrier = c.create_line(0, self.GROUND_Y - 2, self.CW,
+                                     self.GROUND_Y - 2, fill=ACCENT, width=3,
+                                     state="hidden")
+        self.plat_glow = c.create_rectangle(0, 0, 0, 0, fill="",
+                                            outline=ACCENT, width=5)
+        self.plat = c.create_rectangle(0, 0, 0, 0, fill="#334155",
+                                       outline="#e2e8f0", width=2)
+        self.plat_gold = c.create_rectangle(0, 0, 0, 0, fill=GOLD, outline="")
+
+        # wind streaks
+        self.streaks = []
+        for _ in range(14):
+            sid = c.create_line(0, 0, 0, 0, fill="#93c5fd", width=1,
+                                state="hidden")
+            self.streaks.append([sid, random.uniform(0, self.CW),
+                                 random.uniform(30, self.GROUND_Y - 30),
+                                 random.uniform(18, 46)])
+
+        self.guide_dots = [
+            c.create_oval(0, 0, 0, 0, fill="#a5f3fc", outline="",
+                          state="hidden") for _ in range(self.GUIDE_N)]
+        self.ghost = c.create_oval(0, 0, 0, 0, outline=ACCENT, width=2,
+                                   dash=(4, 3), state="hidden")
+
+        # drone
+        self.claw_l = c.create_line(0, 0, 0, 0, fill="#94a3b8", width=3)
+        self.claw_r = c.create_line(0, 0, 0, 0, fill="#94a3b8", width=3)
+        self.mast_l = c.create_line(0, 0, 0, 0, fill="#94a3b8", width=2)
+        self.mast_r = c.create_line(0, 0, 0, 0, fill="#94a3b8", width=2)
+        self.rotor_l = c.create_line(0, 0, 0, 0, fill=ACCENT, width=3)
+        self.rotor_r = c.create_line(0, 0, 0, 0, fill=ACCENT, width=3)
+        self.body = c.create_oval(0, 0, 0, 0, fill="#1e293b",
+                                  outline=ACCENT, width=2)
+        self.light = c.create_oval(0, 0, 0, 0, fill=RED, outline="")
+
+        # ball
+        self.ball_glow = c.create_oval(0, 0, 0, 0, fill="", outline="")
+        self.arrow = c.create_line(0, 0, 0, 0, fill="white", width=3,
+                                   arrow=tk.LAST, arrowshape=(10, 12, 5))
+        self.ball = c.create_oval(0, 0, 0, 0, fill="red", outline="white",
+                                  width=2)
+        self.decor = [c.create_oval(0, 0, 0, 0, fill="white", outline="",
+                                    state="hidden") for _ in range(3)]
+        self.ball_shine = c.create_oval(0, 0, 0, 0, fill="white", outline="",
+                                        stipple="gray50")
+
+        # HUD inside the canvas
+        self.info = c.create_text(self.CW / 2, self.GROUND_Y + 22, text="",
+                                  font=(FONT, 9, "bold"), fill=TEXT)
+        c.create_text(20, 418, anchor="w", text="WARP", fill=VIOLET,
+                      font=(FONT, 9, "bold"))
+        c.create_rectangle(62, 413, 224, 423, outline=VIOLET, width=1)
+        self.en_fill = c.create_rectangle(63, 414, 63, 422, fill=VIOLET,
+                                          outline="")
+        self.en_text = c.create_text(232, 418, anchor="w", text="0%",
+                                     fill=MUTED, font=(FONT, 9, "bold"))
+        self.fx_text = c.create_text(self.CW - 16, 418, anchor="e", text="",
+                                     fill=ACCENT, font=(FONT, 9, "bold"))
+        for sx, sy, dx, dy in ((4, 4, 1, 1), (self.CW - 4, 4, -1, 1),
+                               (4, self.CH - 4, 1, -1),
+                               (self.CW - 4, self.CH - 4, -1, -1)):
+            c.create_line(sx, sy + dy * 22, sx, sy, sx + dx * 22, sy,
+                          fill=ACCENT, width=2)
+
+        self.flash = c.create_rectangle(0, 0, self.CW, self.CH,
+                                        fill="#ffffff", outline="",
+                                        stipple="gray25", state="hidden")
+
+        # ---- screens ----
+        self.overlay = c.create_rectangle(0, 0, self.CW, self.CH,
+                                          fill="#000000", stipple="gray50",
+                                          outline="", state="hidden")
+        self.shadow_text("banner", 90, 30)
+        self.shadow_text("sub", 150, 12)
+        self.shadow_text("count", 190, 64)
+        self.shadow_text("pause", 130, 26)
+        self.shadow_text("toast", 14, 11)
+
+        # title screen
+        self.menu_best = c.create_text(
+            20, 22, anchor="w", text="", fill=ORANGE,
+            font=(FONT, 11, "bold"), tags=("scr_menu",), state="hidden")
+        self.menu_coins = c.create_text(
+            self.CW - 20, 22, anchor="e", text="", fill=GOLD,
+            font=(FONT, 11, "bold"), tags=("scr_menu",), state="hidden")
+        self.make_button("scr_menu", "btn_play", 350, 232, 260, 48,
+                         "▶  PLAY", "#059669", self.new_game, size=16)
+        self.make_button("scr_menu", "btn_diff", 350, 288, 260, 38,
+                         "", SLATE, self.cycle_diff, size=12)
+        self.make_button("scr_menu", "btn_shop_menu", 255, 340, 160, 40,
+                         "SHOP", "#6d28d9",
+                         lambda: self.open_sub("shop", "menu"), size=13)
+        self.make_button("scr_menu", "btn_ach_menu", 445, 340, 160, 40,
+                         "MISSIONS", "#0e7490",
+                         lambda: self.open_sub("ach", "menu"), size=13)
+
+        # game-over screen
+        self.make_button("scr_over", "btn_again", 350, 262, 240, 40,
+                         "↺  PLAY AGAIN", "#059669", self.new_game, size=13)
+        self.make_button("scr_over", "btn_shop_over", 265, 312, 140, 38,
+                         "SHOP", "#6d28d9",
+                         lambda: self.open_sub("shop", "over"), size=12)
+        self.make_button("scr_over", "btn_ach_over", 435, 312, 140, 38,
+                         "MISSIONS", "#0e7490",
+                         lambda: self.open_sub("ach", "over"), size=12)
+        self.make_button("scr_over", "btn_menu_over", 350, 362, 240, 38,
+                         "☰  MENU", SLATE, self.go_menu, size=12)
+
+        # pause screen
+        self.make_button("scr_pause", "btn_resume", 350, 215, 220, 44,
+                         "▶  RESUME", "#059669", self.toggle_pause, size=13)
+        self.make_button("scr_pause", "btn_quit", 350, 270, 220, 44,
+                         "☰  QUIT TO MENU", SLATE, self.go_menu, size=13)
+
+        # shop + missions screens (static parts)
+        for name, title in (("shop", "SHOP"), ("ach", "MISSIONS")):
+            c.create_rectangle(0, 0, self.CW, self.CH, fill="#060b1c",
+                               outline="", tags=("scr_" + name,),
+                               state="hidden")
+            c.create_text(30, 34, anchor="w", text=title, fill=ACCENT,
+                          font=(FONT, 24, "bold"), tags=("scr_" + name,),
+                          state="hidden")
+        self.shop_coins = c.create_text(
+            self.CW - 30, 34, anchor="e", text="", fill=GOLD,
+            font=(FONT, 18, "bold"), tags=("scr_shop",), state="hidden")
+        self.shop_msg = c.create_text(
+            350, 366, text="", fill=MUTED, font=(FONT, 11, "bold"),
+            tags=("scr_shop",), state="hidden")
+        self.make_button("scr_shop", "btn_shop_back", 350, 402, 150, 34,
+                         "←  BACK", SLATE, self.close_sub, size=12)
+        self.ach_count = c.create_text(
+            self.CW - 30, 34, anchor="e", text="", fill=GREEN,
+            font=(FONT, 14, "bold"), tags=("scr_ach",), state="hidden")
+        self.make_button("scr_ach", "btn_ach_back", 350, 402, 150, 34,
+                         "←  BACK", SLATE, self.close_sub, size=12)
+
+    def raise_ui(self):
+        c = self.canvas
+        c.tag_raise(self.flash)
+        c.tag_raise(self.overlay)
+        for tag in ("banner", "sub", "count", "pause"):
+            c.tag_raise(tag + "_sh")
+            c.tag_raise(tag)
+        for scr in self.SCREENS:
+            c.tag_raise("scr_" + scr)
+        c.tag_raise("toast_sh")
+        c.tag_raise("toast")
+
+    def show_screen(self, name):
+        c = self.canvas
+        for scr in self.SCREENS:
+            c.itemconfig("scr_" + scr, state="hidden")
+        c.itemconfig(self.overlay,
+                     state="normal" if name in ("menu", "over", "pause")
+                     else "hidden")
+        if name:
+            c.itemconfig("scr_" + name, state="normal")
+        c.config(cursor="")
+        self.raise_ui()
+
+    # ------------------------------------------------------------------
+    # Skins
+    # ------------------------------------------------------------------
+    def apply_skins(self):
+        self.ball_skin = SKIN_BY_ID["ball"][self.equipped["ball"]]
+        self.plat_skin = SKIN_BY_ID["plat"][self.equipped["plat"]]
+        sk = self.plat_skin
+        self.canvas.itemconfig(self.plat, fill=sk["fill"],
+                               outline=sk["outline"])
+        self.canvas.itemconfig(self.plat_gold, fill=sk["center"])
+
+    def rainbow(self, offset=0.0):
+        h = (self.clock * 0.6 + offset) % 1.0
+        r, g, b = colorsys.hsv_to_rgb(h, 0.75, 1.0)
+        return "#%02x%02x%02x" % (int(r * 255), int(g * 255), int(b * 255))
+
+    # ------------------------------------------------------------------
+    # Sub screens: shop & missions
+    # ------------------------------------------------------------------
+    def open_sub(self, name, came_from):
+        self.shop_from = came_from
+        self.state = name
+        self.show_screen(name)
+        if name == "shop":
+            self.shop_message = ("Click an item to buy or equip it", MUTED)
+            self.draw_shop()
+        else:
+            self.draw_ach()
+
+    def close_sub(self):
+        if self.state not in ("shop", "ach"):
+            return
+        self.state = self.shop_from
+        self.show_screen(self.shop_from)
+        self.refresh_menu_stats()
+        self.put_text("pause", "")
+
+    def set_tab(self, kind):
+        self.shop_tab = kind
+        self.draw_shop()
+
+    def draw_shop(self):
+        c = self.canvas
+        c.delete("shop_dyn")
+        kind = self.shop_tab
+        c.itemconfig(self.shop_coins, text=f"● {self.coins:,}")
+        text, color = self.shop_message
+        c.itemconfig(self.shop_msg, text=text, fill=color)
+
+        for key, label, x in (("ball", "BALLS", 190),
+                              ("plat", "PLATFORMS", 350),
+                              ("upg", "UPGRADES", 510)):
+            self.make_button("scr_shop", f"tab_{key}", x, 76, 150, 30, label,
+                             "#6d28d9" if key == kind else "#1e293b",
+                             lambda k=key: self.set_tab(k), size=11,
+                             state="normal", extra=("shop_dyn",))
+        if kind == "upg":
+            self.draw_upgrades()
+        else:
+            self.draw_skin_cards(kind)
+        self.raise_ui()
+
+    def draw_skin_cards(self, kind):
+        c = self.canvas
+        for i, sk in enumerate(SKINS[kind]):
+            col, row = i % 5, i // 5
+            x0, y0 = 24 + col * 132, 112 + row * 118
+            key = f"card_{kind}_{i}"
+            tags = ("scr_shop", "shop_dyn", key)
+            owned = sk["id"] in self.owned[kind]
+            equipped = self.equipped[kind] == sk["id"]
+            border = GREEN if equipped else ("#64748b" if owned else "#26324f")
+            c.create_rectangle(x0, y0, x0 + 124, y0 + 108, fill=CARD,
+                               outline=border, width=3 if equipped else 2,
+                               tags=tags)
+            if kind == "ball":
+                self.preview_ball(x0 + 62, y0 + 34, 17, sk, tags)
+            else:
+                self.preview_plat(x0 + 62, y0 + 38, sk, tags)
+            c.create_text(x0 + 62, y0 + 66, text=sk["name"], fill=TEXT,
+                          font=(FONT, 10, "bold"), tags=tags)
+            if equipped:
+                label, lcol = "EQUIPPED", GREEN
+            elif owned:
+                label, lcol = "EQUIP", ACCENT
+            else:
+                label = f"● {sk['price']}"
+                lcol = GOLD if self.coins >= sk["price"] else RED
+            c.create_text(x0 + 62, y0 + 90, text=label, fill=lcol,
+                          font=(FONT, 11, "bold"), tags=tags)
+            c.tag_bind(key, "<Button-1>",
+                       lambda e, k=kind, n=i: self.card_click(k, n))
+            c.tag_bind(key, "<Enter>", lambda e: c.config(cursor="hand2"))
+            c.tag_bind(key, "<Leave>", lambda e: c.config(cursor=""))
+
+    def draw_upgrades(self):
+        c = self.canvas
+        for i, u in enumerate(UPGRADES):
+            y0 = 108 + i * 46
+            key = f"upg_{i}"
+            tags = ("scr_shop", "shop_dyn", key)
+            lvl = self.upg[u["id"]]
+            maxed = lvl >= u["max"]
+            price = u["base"] * (lvl + 1)
+            c.create_rectangle(24, y0, 676, y0 + 40, fill=CARD,
+                               outline=GREEN if maxed else "#26324f",
+                               width=2, tags=tags)
+            c.create_text(40, y0 + 13, anchor="w", text=u["name"], fill=TEXT,
+                          font=(FONT, 11, "bold"), tags=tags)
+            c.create_text(40, y0 + 29, anchor="w", text=u["desc"], fill=MUTED,
+                          font=(FONT, 9), tags=tags)
+            c.create_text(450, y0 + 20, anchor="w",
+                          text="■" * lvl + "□" * (u["max"] - lvl),
+                          fill=ACCENT, font=(FONT, 12, "bold"), tags=tags)
+            if maxed:
+                label, lcol = "MAX", GREEN
+            else:
+                label = f"● {price}"
+                lcol = GOLD if self.coins >= price else RED
+            c.create_text(660, y0 + 20, anchor="e", text=label, fill=lcol,
+                          font=(FONT, 12, "bold"), tags=tags)
+            c.tag_bind(key, "<Button-1>",
+                       lambda e, n=i: self.buy_upgrade(n))
+            c.tag_bind(key, "<Enter>", lambda e: c.config(cursor="hand2"))
+            c.tag_bind(key, "<Leave>", lambda e: c.config(cursor=""))
+
+    def preview_ball(self, cx, cy, r, sk, tags):
+        c = self.canvas
+        if sk.get("special") == "rainbow":
+            cols = ["#ef4444", "#f59e0b", "#fde047", "#22c55e", "#38bdf8",
+                    "#a855f7"]
+            for j, col in enumerate(cols):
+                c.create_arc(cx - r, cy - r, cx + r, cy + r, start=j * 60,
+                             extent=60, fill=col, outline="", tags=tags)
+            c.create_oval(cx - r, cy - r, cx + r, cy + r, outline="#ffffff",
+                          width=2, tags=tags)
+        else:
+            col = mix(sk["slow"], sk["fast"], 0.3)
+            c.create_oval(cx - r, cy - r, cx + r, cy + r, fill=col,
+                          outline=sk["outline"], width=2, tags=tags)
+            for dx, dy, s, dcol in sk["decor"]:
+                c.create_oval(cx + dx * r - s * r, cy + dy * r - s * r,
+                              cx + dx * r + s * r, cy + dy * r + s * r,
+                              fill=dcol, outline="", tags=tags)
+        c.create_oval(cx - r * .6, cy - r * .7, cx - r * .1, cy - r * .25,
+                      fill="white", outline="", stipple="gray50", tags=tags)
+
+    def preview_plat(self, cx, cy, sk, tags):
+        c = self.canvas
+        if sk.get("special") == "rainbow":
+            outline, center = "#f472b6", "#38bdf8"
+        else:
+            outline, center = sk["outline"], sk["center"]
+        c.create_rectangle(cx - 42, cy - 6, cx + 42, cy + 6, fill=sk["fill"],
+                           outline=outline, width=2, tags=tags)
+        c.create_rectangle(cx - 12, cy - 4, cx + 12, cy + 4, fill=center,
+                           outline="", tags=tags)
+
+    def card_click(self, kind, idx):
+        sk = SKINS[kind][idx]
+        sid = sk["id"]
+        if sid in self.owned[kind]:
+            self.equipped[kind] = sid
+            self.shop_message = (f"{sk['name']} equipped", GREEN)
+        elif self.coins >= sk["price"]:
+            self.coins -= sk["price"]
+            self.owned[kind].append(sid)
+            self.equipped[kind] = sid
+            self.shop_message = (f"Bought {sk['name']}!", GOLD)
+        else:
+            need = sk["price"] - self.coins
+            self.shop_message = (f"Not enough coins - need {need} more", RED)
+        self.apply_skins()
+        self.save_game()
+        self.update_hud()
+        self.draw_shop()
+
+    def buy_upgrade(self, idx):
+        u = UPGRADES[idx]
+        lvl = self.upg[u["id"]]
+        price = u["base"] * (lvl + 1)
+        if lvl >= u["max"]:
+            self.shop_message = (f"{u['name']} is already maxed", MUTED)
+        elif self.coins >= price:
+            self.coins -= price
+            self.upg[u["id"]] = lvl + 1
+            self.shop_message = (f"{u['name']} upgraded to level {lvl + 1}!",
+                                 GOLD)
+        else:
+            self.shop_message = (
+                f"Not enough coins - need {price - self.coins} more", RED)
+        self.save_game()
+        self.update_hud()
+        self.draw_shop()
+
+    def draw_ach(self):
+        c = self.canvas
+        c.delete("ach_dyn")
+        c.itemconfig(self.ach_count,
+                     text=f"{len(self.ach)}/{len(ACHIEVEMENTS)} COMPLETE")
+        for i, a in enumerate(ACHIEVEMENTS):
+            col, row = i // 6, i % 6
+            x0, y0 = 24 + col * 332, 84 + row * 46
+            tags = ("scr_ach", "ach_dyn")
+            done = a["id"] in self.ach
+            cur = min(self.stats[a["stat"]], a["target"])
+            c.create_rectangle(x0, y0, x0 + 320, y0 + 40, fill=CARD,
+                               outline=GREEN if done else "#26324f",
+                               width=2, tags=tags)
+            c.create_text(x0 + 10, y0 + 13, anchor="w", text=a["name"],
+                          fill=GREEN if done else TEXT,
+                          font=(FONT, 11, "bold"), tags=tags)
+            c.create_text(x0 + 10, y0 + 29, anchor="w", text=a["desc"],
+                          fill=MUTED, font=(FONT, 9), tags=tags)
+            label = (f"✓ +{a['reward']}●" if done
+                     else f"{cur}/{a['target']}  +{a['reward']}●")
+            c.create_text(x0 + 310, y0 + 20, anchor="e", text=label,
+                          fill=GREEN if done else GOLD,
+                          font=(FONT, 10, "bold"), tags=tags)
+        self.raise_ui()
+
+    # ------------------------------------------------------------------
+    # Scenery
+    # ------------------------------------------------------------------
+    def draw_background(self):
+        if self.bg_planet == self.planet:
+            return
+        self.bg_planet = self.planet
+        c = self.canvas
+        c.delete("bg")
+        th = THEMES[self.planet]
+        top, bottom = th["sky"]
+        edge = th["edge"]
+        gfill = mix(bottom, "#000000", 0.82)
+        rng = random.Random(sum(map(ord, self.planet)))
+
+        bands = 60
+        for i in range(bands):
+            t = i / (bands - 1)
+            if th["stripes"]:
+                t += 0.07 * math.sin(i * 1.1)
+            y0 = i * self.GROUND_Y / bands
+            y1 = (i + 1) * self.GROUND_Y / bands + 1
+            c.create_rectangle(0, y0, self.CW, y1, fill=mix(top, bottom, t),
+                               outline="", tags="bg")
+
+        for _ in range(th["stars"]):
+            x = rng.randint(0, self.CW)
+            y = rng.randint(0, th["star_ymax"])
+            s = rng.choice([1, 1, 2])
+            c.create_oval(x, y, x + s, y + s, fill="#e0f2fe", outline="",
+                          tags="bg")
+
+        # distant orb with a ring
+        ox, oy, orad = rng.randint(480, 620), rng.randint(90, 150), 34
+        c.create_oval(ox - orad, oy - orad, ox + orad, oy + orad,
+                      fill=mix(edge, bottom, 0.65), outline="", tags="bg",
+                      stipple="gray50")
+        c.create_oval(ox - orad * 1.8, oy - orad * .35, ox + orad * 1.8,
+                      oy + orad * .35, outline=mix(edge, bottom, 0.3),
+                      width=2, tags="bg")
+
+        if th["cloud"]:
+            for cx, cy in [(130, 190), (560, 220), (400, 150)]:
+                for dx, dy, w, h in [(0, 0, 70, 26), (-24, 8, 50, 20),
+                                     (26, 8, 54, 20)]:
+                    c.create_oval(cx + dx - w / 2, cy + dy - h / 2,
+                                  cx + dx + w / 2, cy + dy + h / 2,
+                                  fill=th["cloud"], outline="",
+                                  stipple="gray25", tags="bg")
+
+        if th["city"]:                       # futuristic skyline
+            x = -10
+            while x < self.CW:
+                w = rng.randint(20, 46)
+                h = rng.randint(40, 125)
+                c.create_rectangle(x, self.GROUND_Y - h, x + w,
+                                   self.GROUND_Y, fill=gfill, outline="",
+                                   tags="bg")
+                if rng.random() < 0.3:      # antenna
+                    c.create_line(x + w / 2, self.GROUND_Y - h,
+                                  x + w / 2, self.GROUND_Y - h - 12,
+                                  fill=edge, tags="bg")
+                for wy in range(self.GROUND_Y - h + 6, self.GROUND_Y - 8, 10):
+                    for wx in range(int(x) + 4, int(x + w) - 4, 8):
+                        if rng.random() < 0.28:
+                            c.create_rectangle(
+                                wx, wy, wx + 3, wy + 4, outline="",
+                                fill=mix(edge, "#ffffff", rng.random() * .5),
+                                tags="bg")
+                x += w + rng.randint(2, 10)
+
+        # ground: neon cyber grid
+        c.create_rectangle(0, self.GROUND_Y, self.CW, self.CH, fill=gfill,
+                           outline="", tags="bg")
+        grid = mix(edge, gfill, 0.72)
+        for i in range(-16, 17):
+            c.create_line(self.CW / 2 + i * 16, self.GROUND_Y,
+                          self.CW / 2 + i * 62, self.CH, fill=grid, tags="bg")
+        span = self.CH - self.GROUND_Y
+        for k in range(1, 5):
+            y = self.GROUND_Y + span * (k / 4) ** 1.7
+            c.create_line(0, y, self.CW, y, fill=grid, tags="bg")
+        for w, t in ((8, 0.8), (5, 0.55), (2, 0.0)):
+            c.create_line(0, self.GROUND_Y, self.CW, self.GROUND_Y,
+                          fill=mix(edge, gfill, t), width=w, tags="bg")
+
+        # scanlines
+        for y in range(0, self.CH, 4):
+            c.create_line(0, y, self.CW, y, fill="#000000", stipple="gray12",
+                          tags=("bg", "scan"))
+        c.tag_lower("scan")
+        c.tag_lower("bg")
+
+    def draw_ruler(self):
+        c = self.canvas
+        c.delete("ruler")
+        H = self.height
+        raw = H / 5
+        mag = 10 ** math.floor(math.log10(raw))
+        step = min(m * mag for m in (1, 2, 5, 10) if m * mag >= raw)
+        h = 0.0
+        while h <= H + 1e-9:
+            y = self.Y_LAND - h * self.scale
+            c.create_line(48, y, 62, y, fill=ACCENT, width=2, tags="ruler")
+            c.create_line(62, y, self.CW - 30, y, fill=ACCENT,
+                          dash=(2, 10), tags="ruler")
+            c.create_text(44, y, text=f"{h:g} m", anchor="e",
+                          font=(FONT, 8, "bold"), fill=ACCENT, tags="ruler")
+            h += step
+        c.create_line(62, self.Y_LAND, 62, self.DROP_Y, fill=ACCENT,
+                      width=2, tags="ruler")
+        c.tag_lower("ruler")
+        c.tag_lower("scan")
+        c.tag_lower("bg")
+
+    def update_info(self):
+        left = (self.BOUNCES_PER_LEVEL
+                - self.total_bounces % self.BOUNCES_PER_LEVEL)
+        w = int(self.wind)
+        wind = "calm" if abs(w) < 8 else ("►" if w > 0 else "◄") + f" {abs(w)}"
+        text = (f"{self.planet.upper()} · g {self.g:.2f} · {self.height:g} m"
+                f" · wind {wind} · next world in {left}")
+        if self.guide:
+            text += f" · fall {self.fall_time:.2f}s"
+        self.canvas.itemconfig(self.info, text=text)
+
+    # ------------------------------------------------------------------
+    # World / level setup
+    # ------------------------------------------------------------------
+    def pick_height(self):
+        if self.level == 1:
+            return 15
+        valid = [h for h in HEIGHTS
+                 if 1.0 <= math.sqrt(2 * h / self.g) <= 2.2]
+        return random.choice(valid or [1])
+
+    def apply_level(self):
+        lvl, cfg = self.level, self.cfg
+        self.planet = ORDER[(lvl - 1) % len(ORDER)]
+        self.g = PLANETS[self.planet]
+        self.height = self.pick_height()
+        self.scale = self.FALL_PX / self.height
+        self.gpx = self.g * self.scale
+        self.fall_time = math.sqrt(2 * self.height / self.g)
+        apex_px = self.FALL_PX * 0.92
+        self.v_launch = math.sqrt(2 * self.gpx * apex_px)
+        self.tw_base = max(cfg["tw_min"], cfg["tw"] - cfg["shrink"] * (lvl - 1))
+        self.vx_max = min(420.0, cfg["vx"] + 14 * lvl)
+        self.drone.speed = min(240, cfg["drone"] + 8 * lvl)
+        self.draw_background()
+        self.draw_ruler()
+        self.update_info()
+
+    def clear_effects(self):
+        c = self.canvas
+        for d in self.trail:
+            c.delete(d)
+        self.trail.clear()
+        for p in self.particles:
+            c.delete(p[0])
+        self.particles.clear()
+        for pop in self.popups:
+            c.delete(pop[0])
+            c.delete(pop[1])
+        self.popups.clear()
+        for e in self.emps:
+            for item in e["ids"]:
+                c.delete(item)
+        self.emps.clear()
+        c.delete("ring")
+        self.ring = None
+        self.delete_coin()
+
+    def reset_run_state(self):
+        self.energy = 0.0
+        self.shield = False
+        self.wide_t = self.magnet_t = self.slow_t = self.stun_t = 0.0
+        self.wind = self.wind_target = 0.0
+        self.wind_timer = 2.0
+        self.emp_timer = 4.0
+        self.flash_t = 0.0
+
+    # ------------------------------------------------------------------
+    # Game flow
+    # ------------------------------------------------------------------
+    def rally_mult(self, n):
+        return min(5.0, 1 + 0.2 * (n - 1))
+
+    def set_status(self, text, color):
+        self.status.config(text=text, fg=color)
+
+    def save_game(self):
+        write_save({"best": max(self.bests.values()), "bests": self.bests,
+                    "diff": self.diff, "coins": self.coins,
+                    "owned": self.owned, "equipped": self.equipped,
+                    "stats": self.stats, "ach": self.ach, "upg": self.upg})
+
+    def update_hud(self):
+        self.best = max(self.best, self.score)
+        self.stat_vars["SCORE"].set(f"{self.score:,}")
+        self.stat_vars["BEST"].set(f"{self.best:,}")
+        self.unit_vars["BEST"].set(self.diff.lower())
+        self.stat_vars["COINS"].set(f"{self.coins:,}")
+        self.stat_vars["WORLD"].set(str(self.level))
+        self.unit_vars["WORLD"].set(self.planet.lower())
+        self.stat_vars["LIVES"].set(
+            "♥" * self.lives + "♡" * max(0, self.MAX_LIVES - self.lives))
+        self.stat_vars["COMBO"].set(str(self.rally))
+        self.unit_vars["COMBO"].set(
+            f"next x{self.rally_mult(self.rally + 1):.2f}")
+
+    def add_coins(self, n):
+        n = max(1, int(round(n * (1 + 0.1 * self.upg["coin"])
+                             * self.cfg["coin"])))
+        self.coins += n
+        self.run_coins += n
+        return n
+
+    def stat_max(self, key, value):
+        if value > self.stats[key]:
+            self.stats[key] = value
+
+    def check_ach(self):
+        for a in ACHIEVEMENTS:
+            if a["id"] in self.ach:
+                continue
+            if self.stats[a["stat"]] >= a["target"]:
+                self.ach.append(a["id"])
+                self.coins += a["reward"]
+                self.toasts.append(
+                    f"MISSION COMPLETE: {a['name']}  +{a['reward']} ●")
+
+    def refresh_menu_stats(self):
+        self.canvas.itemconfig(
+            self.menu_best, text=f"BEST ({self.diff})  {self.best:,}")
+        self.canvas.itemconfig(self.menu_coins, text=f"● {self.coins:,}")
+        self.canvas.itemconfig(self.btn_text["btn_diff"],
+                               text=f"DIFFICULTY: {self.diff}",
+                               fill=self.cfg["color"])
+
+    def cycle_diff(self):
+        if self.state != "menu":
+            return
+        i = (DIFF_ORDER.index(self.diff) + 1) % len(DIFF_ORDER)
+        self.diff = DIFF_ORDER[i]
+        self.apply_level()
+        self.tw = self.target_tw()
+        self.refresh_menu_stats()
+        self.update_hud()
+        self.save_game()
+
+    def go_menu(self):
+        if self.state in ("shop", "ach"):
+            return
+        self.clear_effects()
+        self.reset_run_state()
+        self.level = 1
+        self.rally = 0
+        self.total_bounces = 0
+        self.score = 0
+        self.lives = self.cfg["lives"] + self.upg["life"]
+        self.squash = 0.0
+        self.apply_level()
+        self.state = "menu"
+        self.show_screen("menu")
+        self.put_text("banner", "GRAVITY BOUNCE", ACCENT)
+        self.put_text("sub", MENU_SUB, "white")
+        self.put_text("count", "")
+        self.put_text("pause", "")
+        self.refresh_menu_stats()
+        self.pause_btn.config(text="⏸ PAUSE")
+        self.update_hud()
+        self.save_game()
+        self.set_status("Welcome, pilot. Press PLAY", GREEN)
+
+    def new_game(self):
+        if self.state in ("shop", "ach"):
+            return
+        self.score = 0
+        self.run_coins = 0
+        self.lives = self.cfg["lives"] + self.upg["life"]
+        self.level = 1
+        self.rally = 0
+        self.best_rally = 0
+        self.total_bounces = 0
+        self.best_start = self.best
+        self.px = self.CW / 2
+        self.pvx = 0.0
+        self.squash = 0.0
+        self.clear_effects()
+        self.reset_run_state()
+        self.apply_level()
+        self.tw = self.target_tw()
+        self.pause_btn.config(text="⏸ PAUSE")
+        self.start_ready()
+        self.update_hud()
+
+    def start_ready(self):
+        self.state = "ready"
+        self.ready_timer = self.COUNTDOWN
+        self.last_count = None
+        self.stun_t = 0.0
+        self.show_screen(None)
+        self.put_text("banner", "")
+        self.put_text("sub", "")
+        self.put_text("pause", "")
+        self.set_status("Get ready - the ball is released automatically",
+                        ACCENT)
+
+    def action(self):
+        s = self.state
+        if s in ("menu", "over"):
+            self.new_game()
+        elif s == "ready":
+            self.ready_timer = 0.0
+        elif s == "paused":
+            self.toggle_pause()
+        elif s == "result":
+            self.result_timer = min(self.result_timer, 0.2)
+        elif s == "play":
+            if self.energy >= 100:
+                self.slow_t = 4.0 * self.dur_mult()
+                self.energy = 0.0
+                self.add_popup(self.px, self.GROUND_Y - 50, "WARP!", VIOLET)
+                self.flash_color, self.flash_t = VIOLET, 0.2
+
+    def drop(self):
+        self.bx, self.by = self.drone.x, float(self.DROP_Y)
+        self.vx = self.drone.vx
+        self.vy = 0.0
+        self.frame_count = 0
+        self.state = "play"
+        self.wind_timer = 0.6
+        self.put_text("count", "GO!", GREEN)
+        self.count_timer = 0.6
+        self.set_status("Keep it off the floor!", ORANGE)
+
+    def toggle_pause(self):
+        if self.state in ("ready", "play", "result"):
+            self.prev_state = self.state
+            self.state = "paused"
+            self.show_screen("pause")
+            self.put_text("pause", "PAUSED", "white")
+            self.pause_btn.config(text="▶ RESUME")
+            self.set_status("Paused", ORANGE)
+        elif self.state == "paused":
+            self.state = self.prev_state
+            self.show_screen(None)
+            self.put_text("pause", "")
+            self.pause_btn.config(text="⏸ PAUSE")
+            self.set_status("Go!", GREEN)
+
+    def toggle_guide(self):
+        self.guide = not self.guide
+        self.guide_btn.config(text="GUIDE: ON" if self.guide else "GUIDE: OFF")
+        self.update_info()
+
+    # ------------------------------------------------------------------
+    # Physics
+    # ------------------------------------------------------------------
+    def update_paddle(self, dt):
+        old = self.px
+        cfg = self.cfg
+        self.tw = lerp(self.tw, self.target_tw(), min(1.0, dt * 9))
+        half = self.tw / 2
+        if self.stun_t > 0:                       # EMP: platform is frozen
+            self.pvx = 0.0
+            self.px = max(half, min(self.CW - half, self.px))
+            return
+        move = (1 if "R" in self.keys else 0) - (1 if "L" in self.keys else 0)
+        if move:
+            self.px += move * cfg["kb"] * dt
+            self.mouse_active = False
+        elif self.mouse_active and self.mouse_x is not None:
+            step = cfg["mouse"] * dt              # limited paddle speed
+            self.px += max(-step, min(step, self.mouse_x - self.px))
+        self.px = max(half, min(self.CW - half, self.px))
+        inst = (self.px - old) / dt if dt > 0 else 0.0
+        inst = max(-600.0, min(600.0, inst))
+        self.pvx = lerp(self.pvx, inst, 0.4)
+
+    def update_effects(self, dt):
+        for name in ("wide_t", "magnet_t", "slow_t", "stun_t", "flash_t"):
+            v = getattr(self, name)
+            if v > 0:
+                setattr(self, name, max(0.0, v - dt))
+        if self.toast_t > 0:
+            self.toast_t -= dt
+            if self.toast_t <= 0:
+                self.put_text("toast", "")
+        if self.toast_t <= 0 and self.toasts:
+            self.put_text("toast", self.toasts.pop(0), GOLD)
+            self.toast_t = 2.6
+            self.update_hud()
+
+    def update_wind(self, dt):
+        self.wind_timer -= dt
+        if self.wind_timer <= 0:
+            self.wind_timer = random.uniform(3.5, 6.5)
+            if self.level >= 2:
+                strength = min(120.0, self.cfg["wind"] * (8 + 7 * self.level))
+                self.wind_target = (random.choice((-1, 1)) * strength
+                                    * random.uniform(0.4, 1.0))
+            else:
+                self.wind_target = 0.0
+        self.wind = lerp(self.wind, self.wind_target, min(1.0, dt * 1.5))
+
+    def update_ready(self, dt):
+        self.ready_timer -= dt
+        if self.ready_timer <= 0:
+            self.drop()
+            return
+        n = min(3, int(self.ready_timer / 0.8) + 1)
+        if n != self.last_count:
+            self.last_count = n
+            self.put_text("count", str(n),
+                          {3: "#ffffff", 2: ORANGE, 1: RED}[n])
+
+    def update_play(self, dt):
+        r = self.BALL_R
+        top = self.GROUND_Y - self.PLAT_H
+        prev_bottom = self.by + r
+
+        self.vy += self.gpx * dt
+        self.vx += self.wind * dt
+        self.bx += self.vx * dt
+        self.by += self.vy * dt
+        self.frame_count += 1
+
+        if self.bx < r:
+            self.bx = r
+            self.vx = abs(self.vx)
+        elif self.bx > self.CW - r:
+            self.bx = self.CW - r
+            self.vx = -abs(self.vx)
+        if self.by < r:
+            self.by = r
+            self.vy = abs(self.vy)
+
+        if self.coin is not None:
+            reach = r + self.COIN_R * (2.6 if self.magnet_t > 0 else 1.0)
+            if math.hypot(self.bx - self.coin["x"],
+                          self.by - self.coin["y"]) <= reach:
+                self.collect_coin()
+
+        bottom = self.by + r
+        if self.vy > 0 and prev_bottom <= top <= bottom:
+            dx = self.bx - self.px
+            if abs(dx) <= self.tw / 2 + r * 0.5:
+                self.paddle_bounce(dx)
+                return
+        if bottom >= self.GROUND_Y:
+            self.floor_hit()
+            return
+        if self.frame_count % 3 == 0:
+            self.add_trail(self.bx, self.by)
+
+    def paddle_bounce(self, dx):
+        r = self.BALL_R
+        top = self.GROUND_Y - self.PLAT_H
+        half = self.tw / 2
+        off = max(-1.0, min(1.0, dx / half))
+
+        self.rally += 1
+        self.total_bounces += 1
+        self.best_rally = max(self.best_rally, self.rally)
+        self.stats["bounces"] += 1
+        self.stat_max("best_rally", self.rally)
+
+        acc = 1.0 - abs(off)
+        bullseye = abs(dx) <= half * 0.3
+        if bullseye:
+            self.stats["bullseyes"] += 1
+        mult = self.rally_mult(self.rally)
+        bonus = 1 if self.guide else 2
+        pts = int((50 + 50 * acc + (25 if bullseye else 0)) * mult * bonus
+                  * self.cfg["score"])
+        self.score += pts
+        self.add_popup(self.bx, top - 28, f"+{pts}",
+                       GOLD if bullseye else "#ffffff")
+        self.add_coins(2 if bullseye else 1)
+
+        before = self.energy
+        self.energy = min(100.0, self.energy + (16 if bullseye else 6)
+                          * (1 + 0.2 * self.upg["energy"]))
+        if before < 100 <= self.energy:
+            self.add_popup(self.bx, top - 118, "WARP READY", VIOLET)
+
+        if self.coin is not None:
+            self.coin["left"] -= 1
+            if self.coin["left"] <= 0:
+                self.delete_coin()
+
+        if self.total_bounces % self.BOUNCES_PER_LEVEL == 0:
+            self.level += 1
+            self.stat_max("max_level", self.level)
+            self.add_coins(10)
+            self.apply_level()
+            self.wind_timer = 0.0
+            self.put_text("banner",
+                          f"WORLD {self.level}: {self.planet.upper()}", ACCENT)
+            self.put_text("sub", f"g = {self.g:.2f} m/s²   ·   platform "
+                                 f"{int(self.target_tw())}px   ·   +10 coins",
+                          "white")
+            self.banner_timer = 1.8
+            self.save_game()
+        else:
+            self.update_info()
+
+        if self.rally % 10 == 0:
+            n = self.add_coins(5)
+            self.add_popup(self.bx, top - 58, f"+{n} ●", GOLD)
+        if self.rally % self.cfg["life_every"] == 0 \
+                and self.lives < self.MAX_LIVES:
+            self.lives += 1
+            self.add_popup(self.bx, top - 88, "+1 LIFE", PINK)
+
+        # launch back to the same height; landing spot sets sideways speed
+        self.by = top - r
+        self.vy = -self.v_launch
+        vx = off * self.vx_max + 0.25 * self.pvx + random.uniform(-15, 15)
+        cap = self.vx_max * 1.25
+        vx = max(-cap, min(cap, vx))
+        if abs(vx) < 40:
+            vx = 40 if vx >= 0 else -40
+        self.vx = vx
+
+        self.spawn_coin()
+        self.squash = self.SQUASH_TIME
+        self.burst(self.bx, top, [ACCENT, "#ffffff", PINK],
+                   14 if bullseye else 8, 160)
+        self.check_ach()
+        self.update_hud()
+
+    def floor_hit(self):
+        if self.shield:                          # energy barrier saves you
+            self.shield = False
+            self.by = self.GROUND_Y - self.BALL_R
+            self.vy = -self.v_launch * 0.95
+            self.add_popup(self.bx, self.GROUND_Y - 40, "SHIELD!", ACCENT)
+            self.burst(self.bx, self.GROUND_Y, [ACCENT, "#ffffff"], 16, 190)
+            self.flash_color, self.flash_t = ACCENT, 0.18
+            return
+        self.state = "result"
+        self.result_timer = 1.8
+        self.banner_timer = 0.0
+        self.lives -= 1
+        lost = self.rally
+        self.rally = 0
+        self.by = self.GROUND_Y - self.BALL_R
+        self.vy = -abs(self.vy) * 0.45
+        self.vx *= 0.6
+        self.put_text("banner", "SIGNAL LOST", RED)
+        self.put_text("sub", f"The ball touched the floor   ·   rally {lost}",
+                      "white")
+        self.burst(self.bx, self.GROUND_Y, ["#9ca3af", "#6b7280", RED],
+                   16, 170)
+        self.ring = [self.bx, 0.0, "#fca5a5"]
+        self.flash_color, self.flash_t = RED, 0.25
+        self.set_status("The ball hit the floor!", RED)
+        self.update_hud()
+
+    def update_dead_ball(self, dt):
+        r = self.BALL_R
+        self.vy += self.gpx * dt
+        self.bx += self.vx * dt
+        self.by += self.vy * dt
+        if self.bx < r:
+            self.bx, self.vx = r, abs(self.vx)
+        elif self.bx > self.CW - r:
+            self.bx, self.vx = self.CW - r, -abs(self.vx)
+        if self.by + r >= self.GROUND_Y:
+            self.by = self.GROUND_Y - r
+            if abs(self.vy) > 60:
+                self.vy = -self.vy * 0.45
+            else:
+                self.vy = 0.0
+            self.vx *= 0.7
+
+    def after_result(self):
+        if self.lives <= 0:
+            self.game_over()
+            return
+        self.clear_effects()
+        self.start_ready()
+        self.update_hud()
+
+    def game_over(self):
+        self.state = "over"
+        new_best = self.score > self.best_start
+        self.best = max(self.best, self.score)
+        self.check_ach()
+        self.save_game()
+        self.update_hud()
+        self.show_screen("over")
+        line1 = f"Final score: {self.score:,}"
+        if new_best:
+            line1 += "     ★ NEW BEST! ★"
+        msg = (f"{line1}\nWorld reached: {self.level} ({self.planet})     "
+               f"Best rally: {self.best_rally}     [{self.diff}]\n"
+               f"Coins earned this run: +{self.run_coins}")
+        self.put_text("banner", "GAME OVER", RED)
+        self.put_text("sub", msg, "white")
+        self.put_text("count", "")
+        self.set_status("Game over - spend your coins in the shop!", RED)
+
+    # ------------------------------------------------------------------
+    # EMP bombs
+    # ------------------------------------------------------------------
+    def update_emps(self, dt):
+        cfg = self.cfg
+        if self.level >= cfg["emp_start"]:
+            self.emp_timer -= dt
+            if self.emp_timer <= 0:
+                base = max(2.0, cfg["emp_int"] - 0.25 * self.level)
+                self.emp_timer = base * random.uniform(0.7, 1.2)
+                self.spawn_emp()
+        top = self.GROUND_Y - self.PLAT_H
+        keep = []
+        for e in self.emps:
+            if e["warn"] > 0:
+                e["warn"] -= dt
+                keep.append(e)
+                continue
+            e["y"] += self.EMP_SPEED * dt
+            if e["y"] + 10 >= top:
+                if abs(e["x"] - self.px) <= self.tw / 2 + 8:
+                    self.emp_hit(e["x"])
+                else:
+                    self.stats["emps"] += 1
+                    self.burst(e["x"], top + 4, [RED, "#fda4af"], 6, 120)
+                    self.check_ach()
+                for item in e["ids"]:
+                    self.canvas.delete(item)
+                continue
+            keep.append(e)
+        self.emps = keep
+
+    def spawn_emp(self):
+        c = self.canvas
+        half = self.tw / 2
+        x = max(half, min(self.CW - half,
+                          self.px + random.uniform(-220, 220)))
+        idx = DIFF_ORDER.index(self.diff)
+        warn = max(0.5, 1.0 - 0.04 * self.level - 0.1 * idx)
+        line = c.create_line(0, 0, 0, 0, fill=RED, width=2, dash=(3, 5))
+        tgt = c.create_oval(0, 0, 0, 0, outline=RED, width=2)
+        glow = c.create_oval(0, 0, 0, 0, outline="#fda4af", width=2)
+        body = c.create_oval(0, 0, 0, 0, fill=RED, outline="#ffffff", width=2)
+        self.emps.append({"x": x, "y": 24.0, "warn": warn,
+                          "ids": (line, tgt, glow, body)})
+
+    def emp_hit(self, x):
+        top = self.GROUND_Y - self.PLAT_H
+        self.burst(x, top, [RED, "#fda4af", "#ffffff"], 14, 190)
+        if self.shield:
+            self.shield = False
+            self.add_popup(x, top - 40, "SHIELD BREAK", ACCENT)
+            self.flash_color, self.flash_t = ACCENT, 0.18
+        else:
+            self.stun_t = self.cfg["stun"]
+            self.add_popup(x, top - 40, "EMP!", RED)
+            self.flash_color, self.flash_t = RED, 0.22
+
+    def render_emps(self):
+        c = self.canvas
+        top = self.GROUND_Y - self.PLAT_H
+        blink = int(self.clock * 14) % 2 == 0
+        for e in self.emps:
+            line, tgt, glow, body = e["ids"]
+            x, y = e["x"], e["y"]
+            warning = e["warn"] > 0
+            c.coords(line, x, 24, x, top)
+            c.coords(tgt, x - 18, top - 4, x + 18, top + 4)
+            c.coords(glow, x - 15, y - 15, x + 15, y + 15)
+            c.coords(body, x - 9, y - 9, x + 9, y + 9)
+            c.itemconfig(line, state="normal" if warning else "hidden",
+                         fill=RED if blink else "#7f1d1d")
+            c.itemconfig(tgt, outline=RED if blink or not warning
+                         else "#7f1d1d")
+            c.tag_raise(line)
+            c.tag_raise(tgt)
+            c.tag_raise(glow)
+            c.tag_raise(body)
+
+    # ------------------------------------------------------------------
+    # Floating coins & power-ups
+    # ------------------------------------------------------------------
+    def spawn_coin(self):
+        if self.coin is not None:
+            return
+        if (self.total_bounces + 1) % self.BOUNCES_PER_LEVEL == 0:
+            return
+        if random.random() > 0.8:
+            return
+        _, land_x = self.predict()
+        if land_x is None:
+            return
+        r = self.BALL_R
+        off = random.uniform(-0.75, 0.75)
+        t_air = 2 * self.v_launch / self.gpx
+        t = random.uniform(0.25, 0.75) * t_air
+        x = reflect(land_x + off * self.vx_max * t, r, self.CW - r)
+        y = self.Y_LAND - self.v_launch * t + 0.5 * self.gpx * t * t
+        kind = "coin"
+        if random.random() < 0.3:
+            choices = ["wide", "magnet"] + ([] if self.shield else ["shield"])
+            kind = random.choice(choices)
+        ring, fill, label = PICKUPS[kind]
+        c = self.canvas
+        outer = c.create_oval(0, 0, 0, 0, fill=fill, outline=ring, width=2)
+        inner = c.create_oval(0, 0, 0, 0, fill=mix(fill, ring, 0.4),
+                              outline="")
+        txt = c.create_text(0, 0, text=label, fill="white",
+                            font=(FONT, 10, "bold"))
+        self.coin = {"x": x, "y": y, "left": 2, "kind": kind,
+                     "ids": (outer, inner, txt)}
+
+    def collect_coin(self):
+        it = self.coin
+        x, y, kind = it["x"], it["y"], it["kind"]
+        self.stats["pickups"] += 1
+        d = 9.0 * self.dur_mult()
+        if kind == "coin":
+            n = self.add_coins(5)
+            self.add_popup(x, y - 20, f"+{n} ●", GOLD)
+        elif kind == "shield":
+            self.shield = True
+            self.add_popup(x, y - 20, "SHIELD", ACCENT)
+        elif kind == "wide":
+            self.wide_t = d
+            self.add_popup(x, y - 20, "WIDE", PINK)
+        else:
+            self.magnet_t = d
+            self.add_popup(x, y - 20, "MAGNET", ORANGE)
+        self.burst(x, y, [PICKUPS[kind][0], PICKUPS[kind][1], "#ffffff"],
+                   12, 150)
+        self.delete_coin()
+        self.check_ach()
+        self.update_hud()
+
+    def delete_coin(self):
+        if self.coin is not None:
+            for item in self.coin["ids"]:
+                self.canvas.delete(item)
+            self.coin = None
+
+    def render_coin(self):
+        if self.coin is None:
+            return
+        c = self.canvas
+        x, y = self.coin["x"], self.coin["y"]
+        bob = math.sin(self.clock * 3) * 3
+        if self.coin["kind"] == "coin":
+            sp = max(0.25, abs(math.cos(self.clock * 4)))
+        else:
+            sp = 1.0 + 0.08 * math.sin(self.clock * 8)
+        r = self.COIN_R + (3 if self.coin["kind"] != "coin" else 0)
+        outer, inner, txt = self.coin["ids"]
+        c.coords(outer, x - r * sp, y + bob - r, x + r * sp, y + bob + r)
+        c.coords(inner, x - r * sp * .6, y + bob - r * .6,
+                 x + r * sp * .6, y + bob + r * .6)
+        c.coords(txt, x, y + bob)
+        c.tag_raise(outer)
+        c.tag_raise(inner)
+        c.tag_raise(txt)
+
+    # ------------------------------------------------------------------
+    # Prediction (aim guide) - includes wind
+    # ------------------------------------------------------------------
+    def predict(self):
+        r = self.BALL_R
+        top = self.GROUND_Y - self.PLAT_H
+        if self.state == "ready":
+            x, y, vx, vy = self.drone.x, float(self.DROP_Y), self.drone.vx, 0.0
+        else:
+            x, y, vx, vy = self.bx, self.by, self.vx, self.vy
+        h = 1 / 60
+        pts = []
+        for _ in range(600):
+            pb = y + r
+            vy += self.gpx * h
+            vx += self.wind * h
+            x += vx * h
+            y += vy * h
+            if x < r:
+                x, vx = r, abs(vx)
+            elif x > self.CW - r:
+                x, vx = self.CW - r, -abs(vx)
+            if y < r:
+                y, vy = r, abs(vy)
+            pts.append((x, y))
+            if vy > 0 and pb <= top <= y + r:
+                return pts, x
+        return pts, None
+
+    # ------------------------------------------------------------------
+    # Main loop
+    # ------------------------------------------------------------------
+    def tick(self):
+        now = time.perf_counter()
+        dt = min(0.05, now - self.last)
+        self.last = now
+        if self.state not in ("paused", "shop", "ach"):
+            self.update(dt)
+        self.after_id = self.root.after(self.FRAME_MS, self.tick)
+
+    def update(self, dt):
+        self.clock += dt
+        gdt = dt * (self.WARP_SCALE if self.slow_t > 0 else 1.0)
+        self.drone.update(dt)
+        self.update_paddle(dt)
+        self.update_effects(dt)
+
+        s = self.state
+        if s == "play":
+            self.update_wind(gdt)
+            self.update_emps(gdt)
+            self.update_play(gdt)
+        elif s == "ready":
+            self.update_ready(dt)
+        elif s == "result":
+            self.update_dead_ball(gdt)
+            self.result_timer -= dt
+            if self.result_timer <= 0:
+                self.after_result()
+
+        if self.squash > 0:
+            self.squash = max(0.0, self.squash - dt)
+        if self.count_timer > 0:
+            self.count_timer -= dt
+            if self.count_timer <= 0:
+                self.put_text("count", "")
+        if self.banner_timer > 0:
+            self.banner_timer -= dt
+            if self.banner_timer <= 0 and self.state == "play":
+                self.put_text("banner", "")
+                self.put_text("sub", "")
+        self.info_clock += 1
+        if self.info_clock % 15 == 0 and self.state in ("play", "ready"):
+            self.update_info()
+
+        self.update_particles(gdt)
+        self.update_popups(dt)
+        self.update_ring(dt)
+        self.update_streaks(dt)
+        self.render()
+
+    # ------------------------------------------------------------------
+    # Rendering
+    # ------------------------------------------------------------------
+    def render(self):
+        s = self.state
+        attached = s in ("menu", "ready")
+        self.render_paddle()
+        self.render_drone(attached)
+        self.render_guide()
+        self.render_coin()
+        self.render_emps()
+        self.render_fx()
+
+        if attached:
+            self.draw_ball(self.drone.x, self.DROP_Y, self.drone.vx, 0.0)
+        elif s == "play":
+            self.draw_ball(self.bx, self.by, self.vx, self.vy, True)
+        elif s in ("result", "over"):
+            self.draw_ball(self.bx, self.by)
+        self.raise_ui()
+
+    def render_fx(self):
+        c = self.canvas
+        ready = self.energy >= 100
+        w = 160 * self.energy / 100
+        c.coords(self.en_fill, 63, 414, 63 + w, 422)
+        if ready:
+            col = ACCENT if int(self.clock * 6) % 2 == 0 else "#ffffff"
+        else:
+            col = mix(VIOLET, ACCENT, self.energy / 100)
+        c.itemconfig(self.en_fill, fill=col)
+        c.itemconfig(self.en_text, text="READY [SPACE]" if ready
+                     else f"{int(self.energy)}%",
+                     fill=ACCENT if ready else MUTED)
+
+        parts = []
+        if self.shield:
+            parts.append("SHIELD")
+        if self.wide_t > 0:
+            parts.append(f"WIDE {self.wide_t:.0f}s")
+        if self.magnet_t > 0:
+            parts.append(f"MAGNET {self.magnet_t:.0f}s")
+        if self.slow_t > 0:
+            parts.append(f"WARP {self.slow_t:.0f}s")
+        if self.stun_t > 0:
+            parts.append("EMP STUN")
+        txt = "  ·  ".join(parts)
+        if txt != self.fx_cache:
+            self.fx_cache = txt
+            c.itemconfig(self.fx_text, text=txt)
+
+        if self.shield and self.state in ("play", "ready", "result"):
+            pulse = 0.5 + 0.5 * math.sin(self.clock * 6)
+            c.itemconfig(self.barrier, state="normal",
+                         fill=mix(ACCENT, "#ffffff", pulse * 0.6))
+            c.tag_raise(self.barrier)
+        else:
+            c.itemconfig(self.barrier, state="hidden")
+
+        if self.flash_t > 0:
+            c.itemconfig(self.flash, state="normal", fill=self.flash_color)
+        else:
+            c.itemconfig(self.flash, state="hidden")
+
+    def render_paddle(self):
+        c = self.canvas
+        half = self.tw / 2
+        top = self.GROUND_Y - self.PLAT_H
+        c.coords(self.plat, self.px - half, top, self.px + half,
+                 self.GROUND_Y)
+        c.coords(self.plat_glow, self.px - half - 2, top - 2,
+                 self.px + half + 2, self.GROUND_Y + 2)
+        gh = half * 0.3
+        c.coords(self.plat_gold, self.px - gh, top + 2, self.px + gh,
+                 self.GROUND_Y - 2)
+        sk = self.plat_skin
+        if sk.get("special") == "rainbow":
+            outline = self.rainbow()
+            c.itemconfig(self.plat_gold, fill=self.rainbow(0.5))
+        else:
+            outline = sk["outline"]
+        glow = mix(outline, BG, 0.6)
+        if self.stun_t > 0:
+            blink = int(self.clock * 16) % 2 == 0
+            outline = RED if blink else "#7f1d1d"
+            glow = "#7f1d1d"
+        elif self.wide_t > 0:
+            glow = mix(PINK, BG, 0.4)
+        c.itemconfig(self.plat, outline=outline)
+        c.itemconfig(self.plat_glow, outline=glow)
+        c.tag_raise(self.plat_glow)
+        c.tag_raise(self.plat)
+        c.tag_raise(self.plat_gold)
+
+    def render_drone(self, attached):
+        c = self.canvas
+        x, y = self.drone.x, self.DRONE_Y
+        flick = 9 + 7 * abs(math.sin(self.clock * 45))
+        c.coords(self.body, x - 26, y - 8, x + 26, y + 8)
+        for side, mast, rotor in ((-1, self.mast_l, self.rotor_l),
+                                  (1, self.mast_r, self.rotor_r)):
+            mx = x + side * 22
+            c.coords(mast, mx, y - 7, mx, y - 14)
+            c.coords(rotor, mx - flick, y - 14, mx + flick, y - 14)
+        c.coords(self.light, x - 3, y - 3, x + 3, y + 3)
+        c.itemconfig(self.light,
+                     fill=RED if int(self.clock * 4) % 2 == 0 else "#7f1d1d")
+        if attached:
+            r = self.BALL_R
+            c.coords(self.claw_l, x - 10, y + 6, x - r + 1, self.DROP_Y - 3)
+            c.coords(self.claw_r, x + 10, y + 6, x + r - 1, self.DROP_Y - 3)
+            c.itemconfig(self.claw_l, state="normal")
+            c.itemconfig(self.claw_r, state="normal")
+        else:
+            c.itemconfig(self.claw_l, state="hidden")
+            c.itemconfig(self.claw_r, state="hidden")
+
+    def render_guide(self):
+        c = self.canvas
+        if self.guide and self.state in ("ready", "play"):
+            pts, land_x = self.predict()
+            n = self.GUIDE_N
+            for i, dot in enumerate(self.guide_dots):
+                if pts:
+                    idx = max(0, min(len(pts) - 1,
+                                     int((i + 1) * len(pts) / n) - 1))
+                    x, y = pts[idx]
+                    c.coords(dot, x - 2.5, y - 2.5, x + 2.5, y + 2.5)
+                    c.itemconfig(dot, state="normal")
+                else:
+                    c.itemconfig(dot, state="hidden")
+            if land_x is not None:
+                r = self.BALL_R
+                c.coords(self.ghost, land_x - r, self.Y_LAND - r,
+                         land_x + r, self.Y_LAND + r)
+                c.itemconfig(self.ghost, state="normal")
+            else:
+                c.itemconfig(self.ghost, state="hidden")
+            self.guide_shown = True
+        elif self.guide_shown:
+            for dot in self.guide_dots:
+                c.itemconfig(dot, state="hidden")
+            c.itemconfig(self.ghost, state="hidden")
+            self.guide_shown = False
+
+    def draw_ball(self, x, y, vx=0.0, vy=0.0, shadow=False):
+        c = self.canvas
+        r = self.BALL_R
+        sk = self.ball_skin
+        if sk.get("special") == "rainbow":
+            color, outline = self.rainbow(), "#ffffff"
+        else:
+            color = mix(sk["slow"], sk["fast"],
+                        abs(vy) / (self.v_launch * 1.05))
+            outline = sk["outline"]
+
+        k = self.squash / self.SQUASH_TIME if self.squash > 0 else 0.0
+        sx, sy = 1 + 0.4 * k, 1 - 0.35 * k
+        cy = y + r * (1 - sy)
+        rx, ry = r * sx, r * sy
+
+        c.coords(self.ball, x - rx, cy - ry, x + rx, cy + ry)
+        c.itemconfig(self.ball, fill=color, outline=outline)
+        c.coords(self.ball_shine, x - rx * .6, cy - ry * .7,
+                 x - rx * .1, cy - ry * .25)
+        g = 6 + (4 if self.rally >= 20 else 0)       # overdrive glow
+        c.coords(self.ball_glow, x - rx - g, cy - ry - g,
+                 x + rx + g, cy + ry + g)
+        glow = mix(color, "#ffffff", 0.3) if self.rally >= 20 \
+            else mix(color, "#0b1d3a", .6)
+        c.itemconfig(self.ball_glow, fill=glow, stipple="gray50")
+
+        decor = sk.get("decor", [])
+        for i, item in enumerate(self.decor):
+            if i < len(decor):
+                dx, dy, s, dcol = decor[i]
+                ox, oy = x + dx * rx, cy + dy * ry
+                c.coords(item, ox - s * r, oy - s * r, ox + s * r, oy + s * r)
+                c.itemconfig(item, fill=dcol, state="normal")
+            else:
+                c.itemconfig(item, state="hidden")
+
+        mag = math.hypot(vx, vy)
+        length = min(70, mag * 0.14)
+        if length > 8:
+            ux, uy = vx / mag, vy / mag
+            c.coords(self.arrow, x + ux * r, y + uy * r,
+                     x + ux * (r + length), y + uy * (r + length))
+        else:
+            c.coords(self.arrow, 0, 0, 0, 0)
+
+        if shadow:
+            closeness = max(0.0, min(1.0, (y - self.DROP_Y) / self.FALL_PX))
+            sw = 6 + 22 * closeness
+            c.coords(self.shadow, x - sw, self.GROUND_Y + 3,
+                     x + sw, self.GROUND_Y + 9)
+            c.itemconfig(self.shadow, state="normal")
+        else:
+            c.itemconfig(self.shadow, state="hidden")
+
+        c.tag_raise(self.ball_glow)
+        c.tag_raise(self.arrow)
+        c.tag_raise(self.ball)
+        for i in range(min(3, len(decor))):
+            c.tag_raise(self.decor[i])
+        c.tag_raise(self.ball_shine)
+
+    # ------------------------------------------------------------------
+    # Effects
+    # ------------------------------------------------------------------
+    def add_trail(self, x, y):
+        sk = self.ball_skin
+        color = self.rainbow() if sk.get("special") == "rainbow" \
+            else sk["trail"]
+        dot = self.canvas.create_oval(x - 3, y - 3, x + 3, y + 3,
+                                      fill=color, outline="",
+                                      stipple="gray50")
+        self.trail.append(dot)
+        self.canvas.tag_lower(dot, self.ball_glow)
+        if len(self.trail) > 30:
+            self.canvas.delete(self.trail.pop(0))
+
+    def burst(self, x, y, colors, n, speed):
+        for _ in range(n):
+            ang = random.uniform(math.pi * 1.05, math.pi * 1.95)
+            sp = random.uniform(0.3, 1.0) * speed
+            vx, vy = math.cos(ang) * sp, math.sin(ang) * sp
+            s = random.choice((2, 3, 4))
+            pid = self.canvas.create_oval(x - s, y - s, x + s, y + s,
+                                          fill=random.choice(colors),
+                                          outline="")
+            self.particles.append([pid, x, y, vx, vy, 0.0,
+                                   random.uniform(0.6, 1.3), s])
+
+    def update_particles(self, dt):
+        if not self.particles:
+            return
+        gpx = self.g * self.PART_SCALE
+        keep = []
+        for pid, x, y, vx, vy, age, life, s in self.particles:
+            vy += gpx * dt
+            x += vx * dt
+            y += vy * dt
+            age += dt
+            if age >= life or y >= self.GROUND_Y:
+                self.canvas.delete(pid)
+                continue
+            self.canvas.coords(pid, x - s, y - s, x + s, y + s)
+            keep.append([pid, x, y, vx, vy, age, life, s])
+        self.particles = keep
+
+    def update_streaks(self, dt):
+        c = self.canvas
+        active = self.state in ("play", "result") and abs(self.wind) > 10
+        if not active:
+            if self.streaks_on:
+                for st in self.streaks:
+                    c.itemconfig(st[0], state="hidden")
+                self.streaks_on = False
+            return
+        self.streaks_on = True
+        sign = 1 if self.wind > 0 else -1
+        for st in self.streaks:
+            st[1] += self.wind * 3.0 * dt
+            if st[1] > self.CW + 50:
+                st[1] = -50
+            elif st[1] < -50:
+                st[1] = self.CW + 50
+            c.coords(st[0], st[1], st[2], st[1] - sign * st[3], st[2])
+            c.itemconfig(st[0], state="normal")
+
+    def add_popup(self, x, y, text, color):
+        font = (FONT, 14, "bold")
+        sid = self.canvas.create_text(x + 2, y + 2, text=text, font=font,
+                                      fill="#000000")
+        mid = self.canvas.create_text(x, y, text=text, font=font, fill=color)
+        self.popups.append([sid, mid, 0.0])
+
+    def update_popups(self, dt):
+        keep = []
+        for sid, mid, age in self.popups:
+            age += dt
+            if age > 1.0:
+                self.canvas.delete(sid)
+                self.canvas.delete(mid)
+                continue
+            self.canvas.move(sid, 0, -50 * dt)
+            self.canvas.move(mid, 0, -50 * dt)
+            keep.append([sid, mid, age])
+        self.popups = keep
+
+    def update_ring(self, dt):
+        if not self.ring:
+            return
+        x, age, color = self.ring
+        age += dt
+        self.canvas.delete("ring")
+        if age > 0.45:
+            self.ring = None
+            return
+        self.ring[1] = age
+        r = 8 + age * 190
+        yc = self.GROUND_Y - 4
+        self.canvas.create_oval(x - r, yc - r / 4, x + r, yc + r / 4,
+                                outline=color, width=max(1, 4 - int(age * 8)),
+                                tags="ring")
+
+    # ------------------------------------------------------------------
+    def on_close(self):
+        if self.after_id:
+            self.root.after_cancel(self.after_id)
+            self.after_id = None
+        self.save_game()
+        self.root.destroy()
+
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    GravityBounce(root)
+    root.mainloop()
